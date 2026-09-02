@@ -17,6 +17,9 @@ const MINI_MAX_WIDTH: f64 = 480.0;
 const MINI_MAX_HEIGHT: f64 = 340.0;
 const MINI_MARGIN: i32 = 16;
 const MINI_CORNER_MARGIN: i32 = 0;
+const MINI_BROW_COLLAPSED_HEIGHT: f64 = 36.0;
+const MINI_BROW_HEIGHT: f64 = 72.0;
+static MINI_BROW_EXPANDED: AtomicBool = AtomicBool::new(false);
 
 /// Частичный «клики сквозь» (Windows): окно в режиме click-through остаётся
 /// кликабельным только в верхней полосе («шапка» + меню брови), остальное —
@@ -191,25 +194,23 @@ pub fn enforce_mini_topmost(mini: &tauri::Window) -> Result<(), String> {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::WindowsAndMessaging::{
-            SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+            SetWindowPos, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
         };
 
         let connection = db::open()?;
         let pinned = db::setting(&connection, "mini_pinned")?.as_deref() == Some("1");
         drop(connection);
-        if !pinned {
-            return Ok(());
-        }
 
         let raw_handle = mini.window_handle().map_err(|error| error.to_string())?;
         let RawWindowHandle::Win32(win32_handle) = raw_handle.as_raw() else {
             return Err("mini-window does not expose a Win32 handle".to_string());
         };
         let hwnd = HWND(win32_handle.hwnd.get() as *mut std::ffi::c_void);
+        let insert_after = if pinned { HWND_TOPMOST } else { HWND_NOTOPMOST };
         unsafe {
             SetWindowPos(
                 hwnd,
-                HWND_TOPMOST,
+                insert_after,
                 0,
                 0,
                 0,
@@ -222,6 +223,75 @@ pub fn enforce_mini_topmost(mini: &tauri::Window) -> Result<(), String> {
 
     #[cfg(not(target_os = "windows"))]
     let _ = mini;
+
+    Ok(())
+}
+
+pub fn enforce_mini_brow_z_order(app: &AppHandle) -> Result<(), String> {
+    let Some(mini) = app.get_webview_window("mini") else {
+        return Ok(());
+    };
+    let Some(brow) = app.get_webview_window("mini-brow") else {
+        return Ok(());
+    };
+
+    #[cfg(target_os = "windows")]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
+            SWP_NOSIZE,
+        };
+
+        let connection = db::open()?;
+        let pinned = db::setting(&connection, "mini_pinned")?.as_deref() == Some("1");
+        let mini_handle = mini.window_handle().map_err(|error| error.to_string())?;
+        let brow_handle = brow.window_handle().map_err(|error| error.to_string())?;
+        let RawWindowHandle::Win32(mini_win32) = mini_handle.as_raw() else {
+            return Err("mini-window does not expose a Win32 handle".to_string());
+        };
+        let RawWindowHandle::Win32(brow_win32) = brow_handle.as_raw() else {
+            return Err("mini-brow window does not expose a Win32 handle".to_string());
+        };
+        let mini_hwnd = HWND(mini_win32.hwnd.get() as *mut std::ffi::c_void);
+        let brow_hwnd = HWND(brow_win32.hwnd.get() as *mut std::ffi::c_void);
+
+        // Сначала выравниваем тело, потом бровь — так бровь оказывается выше.
+        let mini_insert_after = if pinned { HWND_TOPMOST } else { HWND_NOTOPMOST };
+        unsafe {
+            SetWindowPos(
+                mini_hwnd,
+                mini_insert_after,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+        }
+        .map_err(|error| error.to_string())?;
+
+        let brow_insert_after = if pinned { HWND_TOPMOST } else { HWND_TOP };
+        unsafe {
+            SetWindowPos(
+                brow_hwnd,
+                brow_insert_after,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+        }
+        .map_err(|error| error.to_string())?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = mini;
+        let _ = brow;
+    }
 
     Ok(())
 }
@@ -423,6 +493,7 @@ pub fn restore_window_state(app: &AppHandle) -> Result<(), String> {
         if should_restore_mini(visible, onboarding_done, tray_only, corner_pinned) {
             mini.unminimize().map_err(|error| error.to_string())?;
             mini.show().map_err(|error| error.to_string())?;
+            show_mini_brow(app)?;
         }
         apply_mini_opacity(&mini, opacity)?;
         #[cfg(target_os = "windows")]
@@ -450,6 +521,9 @@ pub fn show_dashboard(app: &AppHandle) {
         let _ = main.show();
         let _ = main.set_focus();
     }
+    // После активации дашборда Windows может перемешать не-topmost окна —
+    // закрепляем бровь над телом, иначе она уходит под mini.
+    let _ = enforce_mini_brow_z_order(app);
 }
 
 pub fn toggle_mini(app: &AppHandle) {
@@ -460,6 +534,7 @@ pub fn toggle_mini(app: &AppHandle) {
         let _ = show_mini(app);
     } else if mini.is_visible().unwrap_or(false) {
         let _ = mini.hide();
+        let _ = hide_mini_brow(app);
         if let Ok(connection) = db::open() {
             let _ = db::set_setting(&connection, "mini_visible", "0");
         }
@@ -492,6 +567,7 @@ pub fn show_mini(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     apply_click_through_window(&mini, click_through_enabled)?;
     enforce_mini_topmost(&mini.as_ref().window())?;
+    show_mini_brow(app)?;
     db::set_setting(&connection, "mini_visible", "1")
 }
 
@@ -500,7 +576,11 @@ pub fn minimize_mini(app: &AppHandle) -> Result<(), String> {
         .get_webview_window("mini")
         .ok_or_else(|| "mini-window is unavailable".to_string())?;
     let _ = save_mini_geometry(app);
-    mini.minimize().map_err(|error| error.to_string())
+    mini.minimize().map_err(|error| error.to_string())?;
+    if let Some(brow) = app.get_webview_window("mini-brow") {
+        brow.minimize().map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 pub fn hide_mini(app: &AppHandle) -> Result<(), String> {
@@ -509,6 +589,7 @@ pub fn hide_mini(app: &AppHandle) -> Result<(), String> {
         .ok_or_else(|| "mini-window is unavailable".to_string())?;
     let _ = save_mini_geometry(app);
     mini.hide().map_err(|error| error.to_string())?;
+    hide_mini_brow(app)?;
     let connection = db::open()?;
     db::set_setting(&connection, "mini_visible", "0")
 }
@@ -520,16 +601,28 @@ pub fn set_mini_pinned(app: &AppHandle, pinned: bool) -> Result<(), String> {
     let previous_pinned = mini.is_always_on_top().map_err(|error| error.to_string())?;
     mini.set_always_on_top(pinned)
         .map_err(|error| error.to_string())?;
+    if let Some(brow) = app.get_webview_window("mini-brow") {
+        if let Err(error) = brow.set_always_on_top(pinned) {
+            let _ = mini.set_always_on_top(previous_pinned);
+            return Err(error.to_string());
+        }
+    }
     let connection = match db::open() {
         Ok(connection) => connection,
         Err(error) => {
             let _ = mini.set_always_on_top(previous_pinned);
+            if let Some(brow) = app.get_webview_window("mini-brow") {
+                let _ = brow.set_always_on_top(previous_pinned);
+            }
             return Err(error);
         }
     };
     if let Err(error) = db::set_setting(&connection, "mini_pinned", if pinned { "1" } else { "0" })
     {
         let _ = mini.set_always_on_top(previous_pinned);
+        if let Some(brow) = app.get_webview_window("mini-brow") {
+            let _ = brow.set_always_on_top(previous_pinned);
+        }
         return Err(error);
     }
     Ok(())
@@ -630,7 +723,8 @@ pub fn resize_mini(app: &AppHandle, width: f64, height: f64, force: bool) -> Res
     if corner.is_empty() {
         Ok(())
     } else {
-        move_mini_to_corner(&mini, &corner, corner_tuck)
+        move_mini_to_corner(&mini, &corner, corner_tuck)?;
+        sync_mini_brow(app)
     }
 }
 
@@ -662,6 +756,7 @@ pub fn apply_mini_click_through(app: &AppHandle, enabled: bool) -> Result<(), St
         if mini_tuck_active(&connection)? {
             let corner = db::setting(&connection, "mini_corner")?.unwrap_or_default();
             move_mini_to_corner(&mini, &corner, false)?;
+            sync_mini_brow(app)?;
         }
     }
     apply_click_through_window(&mini, enabled)
@@ -766,7 +861,8 @@ pub fn set_mini_tuck(app: &AppHandle, tucked: bool) -> Result<(), String> {
         "mini_corner_tuck",
         if tucked { "1" } else { "0" },
     )?;
-    move_mini_to_corner(&mini, &corner, tucked)
+    move_mini_to_corner(&mini, &corner, tucked)?;
+    sync_mini_brow(app)
 }
 
 /// Позиционирование tuck без записи в БД — для hover-reveal (частые вызовы)
@@ -779,7 +875,8 @@ pub fn tuck_mini_position(app: &AppHandle, tucked: bool) -> Result<(), String> {
     if !valid_mini_corner(&corner) {
         return Ok(());
     }
-    move_mini_to_corner(&mini, &corner, tucked)
+    move_mini_to_corner(&mini, &corner, tucked)?;
+    sync_mini_brow(app)
 }
 
 fn move_mini_to_corner(window: &WebviewWindow, corner: &str, tucked: bool) -> Result<(), String> {
@@ -862,7 +959,8 @@ pub fn reset_mini_geometry(app: &AppHandle) -> Result<(), String> {
     mini.set_size(LogicalSize::new(300.0, 228.0))
         .map_err(|error| error.to_string())?;
     place_mini_at_default(&mini)?;
-    save_mini_geometry(app)
+    save_mini_geometry(app)?;
+    sync_mini_brow(app)
 }
 
 pub fn pin_mini_corner(app: &AppHandle, corner: &str) -> Result<(), String> {
@@ -882,6 +980,7 @@ pub fn pin_mini_corner(app: &AppHandle, corner: &str) -> Result<(), String> {
     }
     let tuck = db::setting(&connection, "mini_corner_tuck")?.as_deref() == Some("1");
     move_mini_to_corner(&mini, corner, tuck)?;
+    sync_mini_brow(app)?;
     // окно остаётся ресайзящимся (сужение/растяжение доступны даже в углу) —
     // позиция держится у края через re-anchor после каждого ресайза. (v0.2.36)
     if let Err(error) = db::set_setting(&connection, "mini_corner", corner) {
@@ -901,7 +1000,9 @@ pub fn reanchor_mini_corner(app: &AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let corner_tuck = db::setting(&connection, "mini_corner_tuck")?.as_deref() == Some("1");
-    move_mini_to_corner(&mini, &corner, corner_tuck)
+    move_mini_to_corner(&mini, &corner, corner_tuck)?;
+    // После re-anchor тело могло уехать в tuck; бровь прижимаем к тому же углу экрана.
+    sync_mini_brow(app)
 }
 
 fn place_mini_at_default(window: &WebviewWindow) -> Result<(), String> {
@@ -1032,6 +1133,125 @@ fn distance_squared(point: PhysicalPosition<i32>, origin: PhysicalPosition<i32>)
     let dx = i64::from(point.x) - i64::from(origin.x);
     let dy = i64::from(point.y) - i64::from(origin.y);
     dx.saturating_mul(dx) + dy.saturating_mul(dy)
+}
+
+fn hide_mini_brow(app: &AppHandle) -> Result<(), String> {
+    if let Some(brow) = app.get_webview_window("mini-brow") {
+        brow.hide().map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn show_mini_brow(app: &AppHandle) -> Result<(), String> {
+    let brow = app
+        .get_webview_window("mini-brow")
+        .ok_or_else(|| "mini-brow window is unavailable".to_string())?;
+    sync_mini_brow(app)?;
+    brow.unminimize().map_err(|error| error.to_string())?;
+    brow.show().map_err(|error| error.to_string())?;
+    enforce_mini_brow_z_order(app)?;
+    Ok(())
+}
+
+pub fn sync_mini_brow(app: &AppHandle) -> Result<(), String> {
+    let mini = app
+        .get_webview_window("mini")
+        .ok_or_else(|| "mini-window is unavailable".to_string())?;
+    let brow = app
+        .get_webview_window("mini-brow")
+        .ok_or_else(|| "mini-brow window is unavailable".to_string())?;
+    let mini_position = mini.outer_position().map_err(|error| error.to_string())?;
+    let scale = mini.scale_factor().map_err(|error| error.to_string())?;
+    let width = mini
+        .outer_size()
+        .map_err(|error| error.to_string())?
+        .to_logical::<f64>(scale)
+        .width;
+
+    let connection = db::open()?;
+    let corner = db::setting(&connection, "mini_corner")?.unwrap_or_default();
+    let corner_tuck = db::setting(&connection, "mini_corner_tuck")?.as_deref() == Some("1");
+    let click_through = db::setting(&connection, "mini_click_through")?.as_deref() == Some("1");
+    let valid_corner = valid_mini_corner(&corner);
+    let tucked = valid_corner && corner_tuck && !click_through;
+    drop(connection);
+
+    let target_position = if tucked {
+        // В tuck-режиме бровь должна оставаться у того же угла экрана,
+        // где и таб тела, а не следовать за спрятанным за край телом.
+        compute_tuck_brow_position(&mini, &corner)?
+    } else {
+        mini_position
+    };
+
+    let brow_position = brow.outer_position().map_err(|error| error.to_string())?;
+    if brow_position != target_position {
+        brow.set_position(target_position)
+            .map_err(|error| error.to_string())?;
+    }
+    let brow_size = brow
+        .inner_size()
+        .map_err(|error| error.to_string())?
+        .to_logical::<f64>(brow.scale_factor().map_err(|error| error.to_string())?);
+    let target_height = if MINI_BROW_EXPANDED.load(Ordering::Relaxed) {
+        MINI_BROW_HEIGHT
+    } else {
+        MINI_BROW_COLLAPSED_HEIGHT
+    };
+    if (brow_size.width - width).abs() >= 0.5 || (brow_size.height - target_height).abs() >= 0.5 {
+        brow.set_size(LogicalSize::new(width, target_height))
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+fn compute_tuck_brow_position(
+    mini: &WebviewWindow,
+    corner: &str,
+) -> Result<PhysicalPosition<i32>, String> {
+    let monitor = mini
+        .current_monitor()
+        .map_err(|error| error.to_string())?
+        .or(mini.primary_monitor().map_err(|error| error.to_string())?);
+    let Some(monitor) = monitor else {
+        return mini.outer_position().map_err(|error| error.to_string());
+    };
+    let origin = *monitor.position();
+    let screen_size = *monitor.size();
+    let screen_w = screen_size.width as i32;
+    let screen_h = screen_size.height as i32;
+    let mini_size = mini.outer_size().map_err(|error| error.to_string())?;
+    let w = mini_size.width as i32;
+    let h = mini_size.height as i32;
+    let peek = MINI_TUCK_PEEK;
+
+    Ok(match corner {
+        "tl" => PhysicalPosition::new(origin.x - w + peek, origin.y - h + peek),
+        "tr" => PhysicalPosition::new(origin.x + screen_w - peek, origin.y - h + peek),
+        "bl" => PhysicalPosition::new(origin.x - w + peek, origin.y + screen_h - peek),
+        "br" => PhysicalPosition::new(origin.x + screen_w - peek, origin.y + screen_h - peek),
+        _ => return Err("invalid mini-window corner".to_string()),
+    })
+}
+
+pub fn set_mini_brow_expanded(app: &AppHandle, expanded: bool) -> Result<(), String> {
+    MINI_BROW_EXPANDED.store(expanded, Ordering::Relaxed);
+    sync_mini_brow(app)
+}
+
+pub fn sync_mini_from_brow(app: &AppHandle) -> Result<(), String> {
+    let mini = app
+        .get_webview_window("mini")
+        .ok_or_else(|| "mini-window is unavailable".to_string())?;
+    let brow = app
+        .get_webview_window("mini-brow")
+        .ok_or_else(|| "mini-brow window is unavailable".to_string())?;
+    let position = brow.outer_position().map_err(|error| error.to_string())?;
+    if mini.outer_position().map_err(|error| error.to_string())? != position {
+        mini.set_position(position)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn spawn_updater(

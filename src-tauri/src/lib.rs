@@ -2076,13 +2076,13 @@ fn set_mini_resizable(resizable: bool, app: tauri::AppHandle) -> Result<(), Stri
 }
 
 #[tauri::command]
-fn tuck_mini_position(tucked: bool, app: tauri::AppHandle) -> Result<(), String> {
-    tray::tuck_mini_position(&app, tucked)
+fn set_mini_brow_expanded(expanded: bool, app: tauri::AppHandle) -> Result<(), String> {
+    tray::set_mini_brow_expanded(&app, expanded)
 }
 
 #[tauri::command]
-fn set_mini_hit_band(height: f64, app: tauri::AppHandle) -> Result<(), String> {
-    tray::set_mini_hit_band(&app, height)
+fn tuck_mini_position(tucked: bool, app: tauri::AppHandle) -> Result<(), String> {
+    tray::tuck_mini_position(&app, tucked)
 }
 
 #[tauri::command]
@@ -2102,8 +2102,8 @@ fn reanchor_mini_corner(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn start_mini_drag(window: tauri::WebviewWindow) -> Result<(), String> {
-    if window.label() != "mini" {
-        return Err("dragging is only available for the mini-window".to_string());
+    if window.label() != "mini-brow" {
+        return Err("dragging is only available for the mini-brow window".to_string());
     }
     let connection = db::open()?;
     if db::setting(&connection, "mini_corner")?.is_some_and(|corner| !corner.is_empty()) {
@@ -2219,9 +2219,15 @@ pub fn run() {
                 api.prevent_close();
                 if window.label() == "mini" {
                     let _ = tray::save_mini_geometry(window.app_handle());
+                    if let Some(brow) = window.app_handle().get_webview_window("mini-brow") {
+                        let _ = brow.hide();
+                    }
                     if let Ok(connection) = db::open() {
                         let _ = db::set_setting(&connection, "mini_visible", "0");
                     }
+                } else if window.label() == "mini-brow" {
+                    // Alt+F4 на брови — только скрываем; пересоздание окна дорого
+                    // и ломает управление телом до конца сессии.
                 }
                 let _ = window.hide();
             }
@@ -2229,13 +2235,28 @@ pub fn run() {
                 if !window.is_minimized().unwrap_or(false) {
                     let _ = tray::save_mini_geometry(window.app_handle());
                     let _ = tray::enforce_mini_topmost(window);
+                    let _ = tray::enforce_mini_brow_z_order(window.app_handle());
                 }
+            }
+            tauri::WindowEvent::Focused(true) if window.label() == "mini" => {
+                let _ = tray::enforce_mini_brow_z_order(window.app_handle());
+            }
+            // Бровь поймала фокус — тело не должно оказаться выше неё.
+            tauri::WindowEvent::Focused(true) if window.label() == "mini-brow" => {
+                let _ = tray::enforce_mini_brow_z_order(window.app_handle());
             }
             // Перетащил виджет → сохраняем позицию, иначе после перезапуска она теряется
             // (появляется не там, где оставил). save_mini_geometry сам пропустит сохранение
             // для corner-закреплённого окна (позиция там — производная от угла).
             tauri::WindowEvent::Moved(_) if window.label() == "mini" => {
+                let _ = tray::sync_mini_brow(window.app_handle());
                 let _ = tray::save_mini_geometry(window.app_handle());
+            }
+            tauri::WindowEvent::Resized(_) if window.label() == "mini" => {
+                let _ = tray::sync_mini_brow(window.app_handle());
+            }
+            tauri::WindowEvent::Moved(_) if window.label() == "mini-brow" => {
+                let _ = tray::sync_mini_from_brow(window.app_handle());
             }
             _ => {}
         })
@@ -2304,8 +2325,8 @@ pub fn run() {
             save_mini_geometry,
             resize_mini,
             set_mini_resizable,
+            set_mini_brow_expanded,
             tuck_mini_position,
-            set_mini_hit_band,
             reset_mini_geometry,
             pin_mini_corner,
             reanchor_mini_corner,

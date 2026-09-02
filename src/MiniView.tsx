@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { TodayScoring } from "./components/ScorePanel";
 import { CategoryMark } from "./components/CategoryIcon";
@@ -68,7 +69,7 @@ function EllipsizedText({ className, text }: { className?: string; text: string 
   return <span ref={ref} className={className} aria-label={text} title={truncated ? text : undefined}>{text}</span>;
 }
 
-function MiniIcon({ name }: { name: "corner" | "pin" | "settings" | "hide" | "click" | "chevron" | "dashboard" }) {
+export function MiniIcon({ name }: { name: "corner" | "pin" | "settings" | "hide" | "click" | "chevron" | "dashboard" }) {
   if (name === "corner") {
     return <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.2 8.3 9.7 3.8a2.1 2.1 0 0 1 3 3l-5.9 5.9a3.2 3.2 0 0 1-4.5-4.5l5.4-5.4" /></svg>;
   }
@@ -139,7 +140,6 @@ export function MiniView() {
   const [scoring, setScoring] = useState<TodayScoring | null>(null);
   const [liveSegment, setLiveSegment] = useState<LiveSegment | null>(null);
   const [paused, setPaused] = useState(false);
-  const [pinned, setPinned] = useState(true);
   const [mode, setMode] = useState<MiniMode>("auto");
   const [textSize, setTextSize] = useState<MiniTextSize>("normal");
   const [privacyNow, setPrivacyNow] = useState(false);
@@ -152,25 +152,12 @@ export function MiniView() {
   const [layout, setLayout] = useState<MiniLayout>(defaultMiniLayout);
   const [editingLayout, setEditingLayout] = useState(false);
   const [dayCumulative, setDayCumulative] = useState<TodayCumulative | null>(null);
-  const [browOpen, setBrowOpen] = useState(false);
-  const browTimerRef = useRef<number | null>(null);
-  // «бровь»: панель управления выезжает по hover'у, чтобы не занимать место и не мешать ресайзу окна.
-  const openBrow = () => {
-    if (browTimerRef.current !== null) window.clearTimeout(browTimerRef.current);
-    setBrowOpen(true);
-  };
-  const scheduleCloseBrow = () => {
-    if (browTimerRef.current !== null) window.clearTimeout(browTimerRef.current);
-    browTimerRef.current = window.setTimeout(() => setBrowOpen(false), 280);
-  };
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [cornerOpen, setCornerOpen] = useState(false);
   const [kindLabels, setKindLabels] = useState(defaultKindLabels);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const settingsButtonRef = useRef<HTMLButtonElement | null>(null);
   const settingsPopoverRef = useRef<HTMLElement | null>(null);
-  const cornerButtonRef = useRef<HTMLButtonElement | null>(null);
   const cornerPopoverRef = useRef<HTMLElement | null>(null);
   const tuckTimerRef = useRef<number | null>(null);
   // живой редактор layout: drag-перестановка блоков потока
@@ -183,7 +170,6 @@ export function MiniView() {
   textSizeRef.current = textSize;
 
   const applyMiniState = useCallback((state: MiniState) => {
-    setPinned(state.pinned);
     // Угол — производная от сохранённого mini_corner в БД, НЕ от resizable:
     // окно при закреплении остаётся ресайзящимся (сужение/растяжение доступны),
     // а позиция держится в углу через re-anchor. (v0.2.36)
@@ -249,6 +235,8 @@ export function MiniView() {
     let geometryTimer: number | null = null;
     let stopResizeListener: (() => void) | null = null;
     let stopMoveListener: (() => void) | null = null;
+    let stopPanelListener: (() => void) | null = null;
+    let stopRefreshListener: (() => void) | null = null;
     const saveGeometry = () => {
       if (geometryTimer !== null) window.clearTimeout(geometryTimer);
       geometryTimer = window.setTimeout(() => void invoke("save_mini_geometry"), 400);
@@ -265,12 +253,27 @@ export function MiniView() {
       if (active) stopMoveListener = unlisten;
       else unlisten();
     });
+    void listen<{ panel: "settings" | "corner"; clickThrough: boolean }>("mini://open-panel", (event) => {
+      setClickThrough(event.payload.clickThrough);
+      setSettingsOpen(event.payload.panel === "settings");
+      setCornerOpen(event.payload.panel === "corner");
+      void loadMini();
+    }).then((unlisten) => {
+      if (active) stopPanelListener = unlisten;
+      else unlisten();
+    });
+    void listen("mini://refresh", () => void loadMini()).then((unlisten) => {
+      if (active) stopRefreshListener = unlisten;
+      else unlisten();
+    });
     const refresh = window.setInterval(() => void loadMini(), 5_000);
     return () => {
       active = false;
       document.body.classList.remove("is-mini");
       stopResizeListener?.();
       stopMoveListener?.();
+      stopPanelListener?.();
+      stopRefreshListener?.();
       if (geometryTimer !== null) window.clearTimeout(geometryTimer);
       if (tuckTimerRef.current !== null) window.clearTimeout(tuckTimerRef.current);
       window.clearInterval(refresh);
@@ -286,8 +289,8 @@ export function MiniView() {
     if (!settingsOpen && !cornerOpen) return;
     const closeOutsidePopovers = (event: PointerEvent) => {
       if (!(event.target instanceof Node)) return;
-      if (settingsOpen && !settingsPopoverRef.current?.contains(event.target) && !settingsButtonRef.current?.contains(event.target)) setSettingsOpen(false);
-      if (cornerOpen && !cornerPopoverRef.current?.contains(event.target) && !cornerButtonRef.current?.contains(event.target)) setCornerOpen(false);
+      if (settingsOpen && !settingsPopoverRef.current?.contains(event.target)) setSettingsOpen(false);
+      if (cornerOpen && !cornerPopoverRef.current?.contains(event.target)) setCornerOpen(false);
     };
     const closePopoversOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -302,36 +305,6 @@ export function MiniView() {
       window.removeEventListener("keydown", closePopoversOnEscape);
     };
   }, [settingsOpen, cornerOpen]);
-
-  // Частичный click-through: верхняя «шапка» окна остаётся кликабельной даже при
-  // «кликах сквозь». Кликабельную полосу расширяем под открытые панели (бровь/настройки).
-  useEffect(() => {
-    if (!clickThrough) return;
-    const height = settingsOpen ? 320 : browOpen ? 110 : 72;
-    void invoke("set_mini_hit_band", { height });
-  }, [clickThrough, settingsOpen, browOpen]);
-
-  async function togglePin(event: React.MouseEvent<HTMLButtonElement>) {
-    event.stopPropagation();
-    const previous = pinned;
-    let changed = false;
-    try {
-      await invoke("set_mini_pinned", { pinned: !pinned });
-      changed = true;
-      await syncMiniState();
-      setError(null);
-    } catch (reason: unknown) {
-      if (changed) {
-        try {
-          await invoke("set_mini_pinned", { pinned: previous });
-          await syncMiniState();
-        } catch {
-          setPinned(previous);
-        }
-      }
-      setError(typeof reason === "string" ? reason : t("error.miniPin"));
-    }
-  }
 
   async function saveSetting(key: string, value: string): Promise<void> {
     try {
@@ -403,6 +376,7 @@ export function MiniView() {
     setClickThrough(next);
     try {
       await saveSetting("mini_click_through", next ? "1" : "0");
+      await emitTo("mini-brow", "mini://refresh");
       // при включении окно перестаёт ловить клики — попап закроем сами через 3 сек
       if (next) window.setTimeout(() => setSettingsOpen(false), 3000);
     } catch {
@@ -536,14 +510,6 @@ export function MiniView() {
       setCornerOpen(true);
       setError(typeof reason === "string" ? reason : t("error.miniPin"));
     }
-  }
-
-  async function toggleCornerPopover(event: React.MouseEvent<HTMLButtonElement>) {
-    event.stopPropagation();
-    setSettingsOpen(false);
-    // Всегда открываем меню выбора угла (даже если угол уже запинен).
-    // Распин — повторный клик по активной кнопке угла внутри меню.
-    setCornerOpen((open) => !open);
   }
 
   const away = liveSegment?.status === "away";
@@ -700,120 +666,13 @@ export function MiniView() {
       onMouseEnter={revealTuck}
       onMouseLeave={scheduleTuck}
     >
-      <header
-        className="mini-drag-strip"
-        onMouseDown={(event) => {
-          event.stopPropagation();
-          if (event.button === 0 && !corner) void invoke("start_mini_drag");
-        }}
-        onMouseLeave={scheduleCloseBrow}
-      >
+      <header className="mini-drag-strip">
         <div className="mini-header-status">
           <span className={`mini-pulse is-${trackingTone}`} role="img" aria-label={trackingLabel} title={trackingLabel} />
           <span className="mini-brand">TTLI</span>
           {clickThrough && <span className="mini-privacy-badge mini-click-through-badge" title={t("mini.clickThroughHint")}>{t("mini.clickThroughBadge")}</span>}
         </div>
-        <button
-          type="button"
-          className="mini-brow-handle"
-          aria-label={t("mini.browReveal")}
-          title={t("mini.browReveal")}
-          onMouseEnter={openBrow}
-          onMouseLeave={scheduleCloseBrow}
-          onClick={(event) => event.stopPropagation()}
-        ><MiniIcon name="chevron" /></button>
       </header>
-
-      {browOpen && (
-        <nav
-          className="mini-brow-panel"
-          onMouseEnter={openBrow}
-          onMouseLeave={scheduleCloseBrow}
-          aria-label={t("mini.browActions")}
-        >
-          <button
-            type="button"
-            className="mini-icon-button"
-            aria-label={t("mini.dashboard")}
-            title={t("mini.dashboard")}
-            onPointerDown={(event) => event.stopPropagation()}
-            onMouseDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              setBrowOpen(false);
-              void invoke("show_dashboard");
-            }}
-          ><MiniIcon name="dashboard" /></button>
-          <button
-            ref={cornerButtonRef}
-            type="button"
-            className={`mini-icon-button${corner ? " is-active" : ""}`}
-            aria-pressed={corner !== null}
-            aria-label={corner ? t("mini.cornerUnlock") : t("mini.cornerPin")}
-            title={corner ? t("mini.cornerUnlock") : t("mini.cornerPin")}
-            onPointerDown={(event) => event.stopPropagation()}
-            onMouseDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              setBrowOpen(false);
-              void toggleCornerPopover(event);
-            }}
-          >{corner ? t(`mini.corner.${corner}`) : <MiniIcon name="corner" />}</button>
-          <button
-            type="button"
-            className="mini-icon-button"
-            aria-label={t("mini.hideToTray")}
-            title={t("mini.hideToTray")}
-            onPointerDown={(event) => event.stopPropagation()}
-            onMouseDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              setBrowOpen(false);
-              void invoke("hide_mini");
-            }}
-          ><MiniIcon name="hide" /></button>
-          <span className="mini-brow-sep" aria-hidden="true" />
-          <button
-            type="button"
-            className={`mini-icon-button${pinned ? " is-active" : ""}`}
-            aria-pressed={pinned}
-            aria-label={pinned ? t("mini.unpin") : t("mini.pin")}
-            title={pinned ? t("mini.unpin") : t("mini.pin")}
-            onPointerDown={(event) => event.stopPropagation()}
-            onMouseDown={(event) => event.stopPropagation()}
-            onClick={(event) => void togglePin(event)}
-          ><MiniIcon name="pin" /></button>
-          <button
-            type="button"
-            className={`mini-icon-button${clickThrough ? " is-active" : ""}`}
-            aria-pressed={clickThrough}
-            aria-label={t("mini.clickThrough")}
-            title={t("mini.clickThroughHint")}
-            onPointerDown={(event) => event.stopPropagation()}
-            onMouseDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              setBrowOpen(false);
-              void changeClickThrough(!clickThrough);
-            }}
-          ><MiniIcon name="click" /></button>
-          <button
-            ref={settingsButtonRef}
-            type="button"
-            className="mini-icon-button"
-            aria-label={t("mini.settings")}
-            title={t("mini.settings")}
-            aria-expanded={settingsOpen}
-            onPointerDown={(event) => event.stopPropagation()}
-            onMouseDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              setCornerOpen(false);
-              setSettingsOpen((open) => !open);
-            }}
-          ><MiniIcon name="settings" /></button>
-        </nav>
-      )}
 
       <section className={`mini-body is-layout${editingLayout ? " is-edit-layout" : ""}`}>
         {editingLayout ? (

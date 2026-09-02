@@ -655,6 +655,20 @@ button:focus-visible {
 
 body.is-mini { overflow: hidden; }
 body.is-mini::-webkit-scrollbar, .mini-shell::-webkit-scrollbar { display: none; }
+body.is-mini-brow {
+  min-height: 0;
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+}
+body.is-mini-brow #root { min-height: 0; }
+.mini-brow-shell {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: transparent;
+}
 .mini-shell.mini-text-large {
   --mini-font-body: 14px;
   --mini-font-label: 12px;
@@ -742,6 +756,23 @@ body.is-mini::-webkit-scrollbar, .mini-shell::-webkit-scrollbar { display: none;
 }
 .mini-brow-panel .mini-icon-button { color: var(--muted); }
 .mini-brow-panel .mini-icon-button:hover { color: var(--text); background: var(--hl-low); }
+.mini-brow-panel .mini-brow-off-button {
+  width: auto;
+  gap: 5px;
+  padding-inline: 7px;
+  color: var(--love);
+  white-space: nowrap;
+}
+.mini-brow-panel .mini-brow-off-button span {
+  font: 500 10px/1 var(--font-mono);
+}
+.mini-brow-error {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  color: var(--bad);
+  font: 700 12px/1 var(--font-mono);
+}
 .mini-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--subtle); }
 .mini-pulse.is-live { background: var(--ok); animation: pulse 2s steps(2, end) infinite; }
 .mini-pulse.is-away { background: var(--warn); animation: pulse 1.2s steps(2, end) infinite; }
@@ -964,7 +995,7 @@ body.is-mini::-webkit-scrollbar, .mini-shell::-webkit-scrollbar { display: none;
 .mini-icon-button.is-active .mini-icon-win-front { fill: color-mix(in srgb, var(--iris) 30%, transparent); }
 
 .mini-popover { position: absolute; z-index: 5; border: var(--border); border-radius: var(--radius-sm); background: var(--surface); box-shadow: var(--shadow); color: var(--text); }
-.mini-settings-popover { top: 24px; right: 8px; display: grid; width: min(250px, calc(100% - 16px)); max-height: calc(100vh - 32px); overflow-y: auto; padding: 0 8px 8px; font-size: var(--mini-font-control); scrollbar-color: var(--hl-med) transparent; scrollbar-width: thin; }
+.mini-settings-popover { top: 36px; right: 8px; display: grid; width: min(250px, calc(100% - 16px)); max-height: calc(100vh - 44px); overflow-y: auto; padding: 0 8px 8px; font-size: var(--mini-font-control); scrollbar-color: var(--hl-med) transparent; scrollbar-width: thin; }
 .mini-settings-popover::-webkit-scrollbar { width: 6px; }
 .mini-settings-popover::-webkit-scrollbar-track { background: transparent; }
 .mini-settings-popover::-webkit-scrollbar-thumb { border-radius: var(--radius-pill); background: var(--hl-med); }
@@ -981,7 +1012,7 @@ body.is-mini::-webkit-scrollbar, .mini-shell::-webkit-scrollbar { display: none;
 .mini-settings-window-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
 .mini-settings-window-actions button { min-width: 0; height: 24px; padding: 0 5px; border: var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--text); font-size: var(--mini-font-control); cursor: pointer; }
 .mini-settings-reset { position: sticky; bottom: 0; width: 100%; height: 24px; margin-top: 5px; border: var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: var(--mini-font-control); }
-.mini-corner-popover { top: 25px; right: 58px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 5px; width: max-content; }
+.mini-corner-popover { top: 37px; right: 58px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 5px; width: max-content; }
 .mini-corner-buttons { display: grid; grid-template-columns: repeat(2, 30px); gap: 4px; }
 .mini-corner-popover button { width: 30px; height: 26px; border: var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--text); font: 500 var(--mini-font-control) var(--font-mono); }
 .mini-corner-popover button.is-active { background: color-mix(in srgb, var(--iris) 12%, var(--surface)); color: var(--iris); }
@@ -989,7 +1020,7 @@ body.is-mini::-webkit-scrollbar, .mini-shell::-webkit-scrollbar { display: none;
 .mini-corner-tuck small { grid-column: 2; color: var(--subtle); font-size: 10px; }
 
 @media (max-height: 259px) {
-  .mini-settings-popover { inset: 8px; width: auto; max-height: none; }
+  .mini-settings-popover { inset: 36px 8px 8px; width: auto; max-height: none; }
 }
 
 @media (min-width: 390px) and (min-height: 280px) {

@@ -33,6 +33,7 @@ import {
   type WeekSummaryData,
 } from "./share";
 import { MiniView } from "./MiniView";
+import { MiniBrow } from "./MiniBrow";
 import { parseMiniSettings, type MiniMode, type MiniTextSize } from "./miniSettings";
 import { nextRulePriority, titleRulePattern } from "./classification";
 import { localizedDuration } from "./duration";
@@ -1757,9 +1758,10 @@ const todayLocalDate = (() => {
 })();
 
 function App() {
+  const windowLabel = getCurrentWindow().label;
   return (
     <I18nProvider>
-      {getCurrentWindow().label === "mini" ? <MiniView /> : <DashboardView />}
+      {windowLabel === "mini" ? <MiniView /> : windowLabel === "mini-brow" ? <MiniBrow /> : <DashboardView />}
       {import.meta.env.DEV && <Agentation />}
     </I18nProvider>
   );
