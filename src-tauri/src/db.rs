@@ -1659,12 +1659,12 @@ pub fn mini_hourly(
 #[cfg(test)]
 mod tests {
     use super::{
-        afk_series, daily_series, import_challenge, list_categories, mini_hourly,
+        afk_series, classification_match_stats, daily_series, import_challenge, list_categories, mini_hourly,
         preview_reclassify_history, progress_series, public_xp_through, reclassify_history,
         refresh_daily_stats,
         segment_local_dates, set_setting, today_cumulative, today_scoring, upsert_exe_rule,
         validate_category_tree, MIGRATION_001, MIGRATION_002, MIGRATION_003, MIGRATION_004,
-        MIGRATION_005, MIGRATION_006,
+        MIGRATION_005, MIGRATION_006, MIGRATION_008,
     };
     use rusqlite::{params, Connection};
 
