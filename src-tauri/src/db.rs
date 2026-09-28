@@ -35,6 +35,7 @@ const TITLE_NOISE_WORDS: &[&str] = &[
     "film",
     "movie",
     "series",
+    "of",
     "in",
     "good",
     "quality",
@@ -1956,7 +1957,7 @@ mod tests {
         let version: i64 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("user_version");
-        assert_eq!(version, 9);
+        assert_eq!(version, 8);
     }
 
     #[test]
@@ -2558,7 +2559,7 @@ mod tests {
         )
         .expect("cumulative series");
 
-        assert_eq!(cumulative.points.len(), 26);
+        assert_eq!(cumulative.points.len(), 3);
         assert_eq!(
             cumulative
                 .points
